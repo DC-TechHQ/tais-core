@@ -1,0 +1,77 @@
+# ======================
+# Go
+# ======================
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Coverage output
+*.out
+
+
+# ======================
+# GoLand / IntelliJ IDEA
+# ======================
+.idea/
+*.iml
+
+# ======================
+# macOS
+# ======================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ======================
+# Logs & temp files
+# ======================
+*.log
+tmp/
+temp/
+*.tmp
+
+# ======================
+# Environment variables
+# ======================
+.env
+.env.local
+.env.*.local
+
+# ======================
+# Build artifacts
+# ======================
+bin/
+build/
+dist/
+
+# ======================
+# PostgreSQL
+# ======================
+# Database dumps
+*.sql
+*.dump
+
+# Local PostgreSQL data directories
+pgdata/
+postgres-data/
+
+# ======================
+# Docker
+# ======================
+.docker/
+docker-data/
+
+# ======================
+# Debug
+# ======================
+debug
+__debug_bin
+/config/config.yaml
+CLAUDE.md
+CLAUDE.service-template.md
