@@ -17,9 +17,9 @@ type Config struct {
 // Connect establishes a NATS connection with automatic reconnect, then
 // initialises a JetStream context. Returns error if the initial connection fails.
 //
-// Graceful shutdown — always drain before closing:
-//
-//	defer nc.Drain()
+// Graceful shutdown — call nc.Drain() explicitly in main.go after HTTP shutdown
+// and outbox flush. Do NOT use defer nc.Drain() — shutdown order matters:
+// HTTP stop → outbox cancel (final flush) → nc.Drain().
 func Connect(cfg Config, log *logger.Logger) (*nats.Conn, nats.JetStreamContext, error) {
 	opts := []nats.Option{
 		nats.MaxReconnects(-1), // reconnect indefinitely
@@ -70,10 +70,19 @@ func Publish(js nats.JetStreamContext, subject string, payload any, log *logger.
 // The consumer name ensures the broker tracks delivery state across service
 // restarts and reconnects — messages are never lost.
 //
-// The handler is wrapped with panic recovery: a panicking handler NAKs the
-// message (so it gets redelivered) instead of crashing the service.
+// Consumer naming convention: "{subscribing-service}.{subject-with-dots-as-hyphens}"
+// Example: "tais-tax.tais-registration-vehicle-registered"
+// Example: "tais-audit.tais-all" (for wildcard tais.>)
+// WARNING: never rename a running consumer — JetStream stores sequence state per name.
 //
-// Call nc.Drain() on shutdown to flush in-flight messages before exit.
+// The handler is wrapped with panic recovery: a panicking handler NAKs the
+// message (so JetStream redelivers it) instead of crashing the service.
+// Handlers MUST be idempotent — JetStream delivers at-least-once.
+//
+// Ack semantics the handler must implement:
+//   - msg.Ack()  — processed successfully (or already processed — duplicate)
+//   - msg.Nak()  — transient error, redeliver after AckWait
+//   - msg.Term() — poison message (bad JSON, unrecoverable), never redeliver
 func Subscribe(
 	js nats.JetStreamContext,
 	subject, consumer string,

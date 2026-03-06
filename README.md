@@ -183,15 +183,24 @@ import pkgnats "github.com/DC-TechHQ/tais-core/nats"
 
 // Connect
 nc, js, err := pkgnats.Connect(pkgnats.Config{URL: cfg.NATS.URL}, log)
-defer nc.Drain()
+// Shutdown: call nc.Drain() explicitly in main.go — do NOT defer.
+// Order: HTTP stop → outbox flush → nc.Drain()
 
-// Publish — marshals to JSON internally
-err = pkgnats.Publish(js, "tais.vehicle.vehicle.created", payload, log)
+// Publish — marshals payload to JSON, uses JetStream acknowledged delivery.
+// For critical events (DB write + publish atomic), use the Transactional Outbox
+// pattern instead (see SERVICE-ARCHITECTURE.md ⑮). Direct publish is acceptable
+// for informational events where loss is tolerable.
+err = pkgnats.Publish(js, "tais.vehicle.vehicle.created", evt, log)
 
-// Subscribe — durable consumer with panic recovery
-pkgnats.Subscribe(js, "tais.vehicle.>", "tais-audit-consumer", func(msg *nats.Msg) {
-    // process msg.Data
-    msg.Ack()
+// Subscribe — durable consumer with panic recovery and at-least-once delivery.
+// Consumer name convention: "{subscribing-service}.{subject-with-dots-as-hyphens}"
+pkgnats.Subscribe(js, "tais.>", "tais-audit.tais-all", func(msg *nats.Msg) {
+    // Handlers MUST be idempotent (JetStream delivers at-least-once).
+    // Check processed_events table by BaseEvent.ID before processing.
+    // msg.Ack()  — success or duplicate
+    // msg.Nak()  — transient error, redeliver
+    // msg.Term() — poison message, never redeliver
+    _ = msg.Ack()
 }, log)
 ```
 
@@ -333,14 +342,18 @@ r.Use(pkgmw.CORS(cfg.HTTP.CORSOrigins))
 
 ```go
 // internal/infra/resolver/identity.go
-type identityResolver struct {
-    url   string
-    token string
+type Identity struct {
+    baseURL     string       // e.g. "http://identity:8002"
+    token       string       // X-Internal-Token value
+    serviceName string       // e.g. "tais-vehicle" — from cfg.App.Name, not hardcoded
+    client      *http.Client // explicit timeout, never http.DefaultClient
 }
 
-func (r *identityResolver) Resolve(ctx context.Context, userID uint) (*pkgctx.UserCtx, error) {
-    // GET {r.url}/internal/users/{userID}/context
-    // X-Internal-Token: {r.token}
+func NewIdentity(baseURL, token, serviceName string) *Identity { ... }
+
+func (r *Identity) Resolve(ctx context.Context, userID uint) (*pkgctx.UserCtx, error) {
+    // GET {r.baseURL}/internal/users/{userID}/context
+    // Headers: X-Internal-Token, X-Service-Name
     // → unmarshal into *pkgctx.UserCtx
 }
 ```
@@ -352,29 +365,95 @@ func (r *identityResolver) Resolve(ctx context.Context, userID uint) (*pkgctx.Us
 ```go
 import pkgevent "github.com/DC-TechHQ/tais-core/event"
 
-// Build subject
+// Build NATS subject — always use Subject(), never hardcode strings.
 subj := pkgevent.Subject("registration", "vehicle", "registered")
 // → "tais.registration.vehicle.registered"
 
-// Create event — embed in service-level struct
-type VehicleRegisteredEvent struct {
-    pkgevent.BaseEvent
-    VehicleID uint   `json:"vehicle_id"`
-    VIN       string `json:"vin"`
-}
-
+// Create event envelope.
+// actorID is nil for system-generated events (migrations, scheduled jobs).
 actorID := u.ID
-ev := VehicleRegisteredEvent{
-    BaseEvent: pkgevent.New(subj, "tais-registration", &actorID, nil),
-    VehicleID: v.ID,
-    VIN:       v.VIN,
-}
-
-// Publish via nats
-pkgnats.Publish(js, subj, ev, log)
+evt := pkgevent.New(subj, "tais-registration", &actorID, payload)
+// evt.ID → UUID v4 — used by consumers for deduplication (processed_events table)
 ```
 
-`BaseEvent` fields: `id` (UUID), `subject`, `service`, `actor_id` (`nil` for system events), `occurred_at`, `payload`.
+**Publish modes — choose based on criticality:**
+
+```go
+// Mode A: Informational event — direct publish via broker interface (infra/broker/).
+// Acceptable when losing the event is tolerable (e.g. cache invalidation).
+err = pkgnats.Publish(b.js, subj, evt, b.log)
+
+// Mode B: Critical event (DB write + publish atomic) — Transactional Outbox.
+// Marshal once → store as TEXT in outbox table → background goroutine publishes
+// raw bytes via js.Publish() directly (avoids double-serialisation).
+// See SERVICE-ARCHITECTURE.md ⑮ for complete implementation.
+payload, _ := json.Marshal(evt)        // serialise once
+tx.Outbox.Enqueue(ctx, subj, payload)  // inside DB transaction
+// Publisher goroutine: js.Publish(row.Subject, row.Payload) — NOT pkgnats.Publish
+```
+
+**Architecture rule:** The `app/` layer never holds `nats.JetStreamContext` directly.
+All NATS interaction goes through a `BrokerInterface` defined in `app/` and implemented in `infra/broker/`.
+
+`BaseEvent` fields: `id` (UUID v4), `subject`, `service`, `actor_id` (`*uint`, nil=system), `occurred_at`, `payload`.
+
+---
+
+## Cross-Cutting Patterns
+
+### Transactional Outbox (for critical events)
+
+The outbox guarantees that a DB write and its corresponding NATS event are **atomic** — neither is lost if the service crashes between the two operations.
+
+```
+Service-level (NOT in tais-core — each service owns its own outbox):
+
+domain/repository/outbox.go      → OutboxRepository interface
+domain/repository/unit_of_work.go → UnitOfWork interface + per-service Tx struct
+infra/database/uow.go            → UnitOfWork impl: gorm.DB.Transaction(...)
+infra/repository/postgres/outbox_repo.go → Enqueue / FetchUnpublished / MarkPublished
+infra/outbox/publisher.go        → background goroutine, polls every 500ms
+```
+
+**Key rules:**
+- Payload is serialised **once** (`json.Marshal(evt)`) and stored as `TEXT` in the outbox table.
+- The publisher uses `js.Publish(subject, []byte)` directly — **never** `pkgnats.Publish` (which would marshal again).
+- Single publisher goroutine — sequential flush per tick, no concurrent goroutines sharing a batch.
+- Shutdown order: HTTP stop → `cancelOutbox()` (final flush) → `nc.Drain()`.
+
+### Idempotent NATS consumers
+
+JetStream delivers **at-least-once**. Every consumer MUST be idempotent.
+
+```
+Service-level:
+
+migrations/00003_processed_events.sql  → processed_events(event_id TEXT PK, subject, created_at)
+infra/broker/{entity}_consumer.go      → handler: check → process → mark → Ack
+```
+
+**Handler steps:**
+1. Unmarshal `BaseEvent` — on error: `msg.Term()` (poison, no redeliver)
+2. `EventProcessed(ctx, evt.ID)` — if true: `msg.Ack()` and return
+3. Execute business logic — on transient error: `msg.Nak()` (redeliver after AckWait)
+4. `MarkEventProcessed(ctx, evt.ID)` — best-effort
+5. `msg.Ack()`
+
+### Graceful shutdown order (non-negotiable)
+
+```go
+// 1. Stop HTTP — no new requests
+srv.Shutdown(httpCtx)
+
+// 2. Cancel outbox publisher — triggers final flush while NATS is still up
+ctn.CancelOutbox()
+
+// 3. Drain NATS — flushes pending publishes + in-flight acks, then closes
+ctn.NATS.Drain()
+
+// 4. Flush logger buffers
+log.Sync()
+```
 
 ---
 
