@@ -101,12 +101,17 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 
-		if _, ok := allowed[origin]; ok || len(allowedOrigins) == 0 {
+		if len(allowedOrigins) == 0 {
+			// Development only: permit all origins without credentials.
+			c.Header("Access-Control-Allow-Origin", "*")
+		} else if _, ok := allowed[origin]; ok {
+			// Production: reflect the exact origin and allow credentials.
+			// Per RFC 6454 §7.1, credentials require a specific origin — never "*".
 			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Internal-Token, X-Service-Name, Accept-Language")
-		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == http.MethodOptions {
