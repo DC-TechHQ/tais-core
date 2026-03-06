@@ -46,7 +46,7 @@ func TestGet_FallbackToRU(t *testing.T) {
 
 func TestRegister_Concurrent(t *testing.T) {
 	done := make(chan struct{})
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			i18n.Register(map[string]map[string]string{
 				"ConcurrentCode": {i18n.LangRU: "test"},
@@ -54,7 +54,7 @@ func TestRegister_Concurrent(t *testing.T) {
 			done <- struct{}{}
 		}()
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 }

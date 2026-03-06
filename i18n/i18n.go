@@ -1,6 +1,9 @@
 package i18n
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 const (
 	LangTJ = "tj"
@@ -19,9 +22,7 @@ func Register(data map[string]map[string]string) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	for code, translations := range data {
-		storage[code] = translations
-	}
+	maps.Copy(storage, data)
 }
 
 // Get returns the translation for the given code and language.

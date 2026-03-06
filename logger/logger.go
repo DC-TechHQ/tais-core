@@ -18,10 +18,10 @@ import (
 //	Writes structured JSON to rotating per-level files inside Directory
 //	AND to stdout so Docker log drivers / Grafana Loki pick it up automatically.
 //
-//	  {Directory}/info.log   — info + debug
-//	  {Directory}/warn.log   — warnings
-//	  {Directory}/error.log  — errors
-//	  {Directory}/gorm.log   — slow DB queries (managed by db/gorm_logger.go)
+//	  {Directory}/info.log   — info + debug  (also tees to stdout)
+//	  {Directory}/warn.log   — warnings       (also tees to stdout)
+//	  {Directory}/error.log  — errors         (also tees to stdout)
+//	  {Directory}/gorm.log   — all SQL queries (file only — too verbose for stdout)
 //
 // Console format (development):
 //

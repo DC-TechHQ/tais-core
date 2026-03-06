@@ -49,9 +49,8 @@ pkgi18n.Register(map[string]map[string]string{
 
 // Retrieve translation
 msg := pkgi18n.Get("ErrVehicleNotFound", pkgi18n.LangRU)
+// → "Транспортное средство не найдено"
 ```
-
-**Fallback order:** requested lang → RU → error code itself (never panics).
 
 ---
 
@@ -84,41 +83,28 @@ pkgerr.ErrDeadlock          // 409
 
 ### `logger` — Structured logger
 
-Built on `go.uber.org/zap` + `gopkg.in/natefinch/lumberjack.v2`.
-
-**Log files (JSON / production mode):**
-
-| File | Content |
-|---|---|
-| `{dir}/info.log` | INFO and DEBUG messages |
-| `{dir}/warn.log` | WARN messages |
-| `{dir}/error.log` | ERROR and FATAL messages |
-| `{dir}/gorm.log` | **Every** SQL query (elapsed, rows, slow marker) |
-
-All levels also write to **stdout** so Docker log drivers and Grafana Loki collect them automatically without volume mounts.
+zap + lumberjack. Per-level files: `info.log`, `warn.log`, `error.log`, `debug.log`, `gorm.log`.
+All levels tee to stdout (Docker log drivers / Grafana Loki pick it up).
+`gorm.log` is **file-only** (too verbose for stdout) and captures every SQL query — slow queries (`>200ms`) are marked with `slow_query:true`.
 
 ```go
 import pkglog "github.com/DC-TechHQ/tais-core/logger"
 
 log, err := pkglog.New(pkglog.Config{
-    Directory:  "/var/log/tais-vehicle", // required in json mode
-    Level:      "info",                  // debug | info | warn | error
-    Format:     "json",                  // json (prod) | console (dev)
+    Directory:  "./logs",
+    Level:      "info",        // debug | info | warn | error
+    Format:     "json",        // json | console
     MaxSizeMB:  100,
     MaxBackups: 10,
     MaxAgeDays: 30,
     Compress:   true,
 })
 
-log.Info("vehicle created", "id", v.ID, "vin", v.VIN)
-log.Error("db query failed", "error", err, "id", id)
+log.Info("vehicle created", "id", 42, "vin", "WVWZZZ1KZ")
+log.Error("db error", "error", err)
 
-// Scoped child logger — fields attached to every call:
-repoLog := log.With("component", "vehicle-repo")
-repoLog.Error("FindByID failed", "error", err, "id", id)
-
-// Flush on graceful shutdown:
-defer log.Sync()
+// Child logger with persistent fields
+svcLog := log.With("service", "tais-vehicle", "request_id", reqID)
 ```
 
 ---
@@ -128,11 +114,11 @@ defer log.Sync()
 ```go
 import pkgcfg "github.com/DC-TechHQ/tais-core/config"
 
-// Reads /run/secrets/{name}, falls back to TAIS_{NAME} env var:
-password := pkgcfg.ReadSecret("vehicle-db-password")
+// Reads /run/secrets/tais_{name}, falls back to TAIS_{NAME} env var
+secret := pkgcfg.ReadSecret("vehicle_db_password")
 
-// Panics if not found (use for required secrets in production):
-secret := pkgcfg.MustReadSecret("jwt-secret")
+// Panics if empty (use for required production secrets)
+secret := pkgcfg.MustReadSecret("jwt_secret")
 ```
 
 ---
