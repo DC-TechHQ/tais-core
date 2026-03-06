@@ -125,7 +125,7 @@ func TestBuilder_Pagination(t *testing.T) {
 	if err := gdb.AutoMigrate(&testModel{}); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		gdb.Create(&testModel{Name: "item"})
 	}
 

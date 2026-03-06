@@ -137,50 +137,35 @@ secret := pkgcfg.MustReadSecret("jwt-secret")
 
 ---
 
-### `db` — PostgreSQL / GORM factory
+### `db` — GORM factory + query builder
 
 ```go
 import pkgdb "github.com/DC-TechHQ/tais-core/db"
 
-// Connection factory — each service gets its own *gorm.DB:
+// Open connection
 gdb, err := pkgdb.New(pkgdb.Config{
-    DSN:             cfg.Postgres.DSN(), // includes search_path=schema
+    DSN:             cfg.Postgres.DSN(),
     MaxOpenConns:    25,
     MaxIdleConns:    10,
-    ConnMaxLifetime: 300, // seconds
+    ConnMaxLifetime: 300,
 }, log)
-```
 
-**GORMLogger** — logs **every** SQL query to `gorm.log`:
-- Normal queries → INFO with `sql`, `rows`, `elapsed_ms`, `slow_query: false`
-- Slow queries (>200ms) → INFO with `slow_query: true`
-- Error queries → ERROR with `error` field
+// Translate errors — call in every repository method
+err = pkgdb.TranslateError(err, log)
+// nil → nil, ErrRecordNotFound → *AppError(404), pg23505 → *AppError(409), etc.
 
-**TranslateError** — maps raw GORM/pgx errors to `*AppError`. Must receive `log` for internal logging:
+// Fluent query builder — all column names are validated against
+// ^[a-zA-Z_][a-zA-Z0-9_.]*$ to prevent SQL injection via column interpolation.
+q := pkgdb.NewBuilder(gdb.WithContext(ctx).Model(&models.Vehicle{})).
+    Where("status = ?", filter.Status).          // skipped if Status == ""
+    Search(filter.Search, "vin", "plate_number"). // ILIKE on multiple columns
+    DateRange("created_at", filter.From, filter.To)
 
-```go
-// In repository methods:
-return database.TranslateError(err, r.log)
-// → pkgerr.ErrNotFound      (gorm.ErrRecordNotFound)
-// → pkgerr.ErrAlreadyExists (23505 unique_violation)
-// → pkgerr.ErrForeignKey    (23503 foreign_key_violation)
-// → pkgerr.ErrInvalidData   (23502/23514 null/check violation)
-// → pkgerr.ErrDeadlock      (40P01 deadlock_detected)
-// → pkgerr.ErrInternal      (all others)
-// → nil                     (nil error or context.Canceled)
-```
-
-**Builder** — fluent, nil-safe query builder. All conditions skip when value is zero:
-
-```go
-q := pkgdb.NewBuilder(r.db.WithContext(ctx).Model(&models.Vehicle{})).
-    Where("status = ?", f.Status).           // skipped if f.Status == ""
-    Where("type_id = ?", f.TypeID).          // skipped if f.TypeID == 0
-    Search(f.Search, "vin", "plate_number"). // ILIKE on multiple columns
-    DateRange("created_at", f.From, f.To)   // skipped if empty
-
+var total int64
 q.Build().Count(&total)
-q.OrderBy("created_at", "desc").Pagination(f.Params).Build().Find(&list)
+
+var ms []models.Vehicle
+q.Pagination(filter.Params).OrderBy("created_at", "desc").Build().Find(&ms)
 ```
 
 ---
