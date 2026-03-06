@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	pkgctx "github.com/DC-TechHQ/tais-core/context"
 	pkgerr "github.com/DC-TechHQ/tais-core/errors"
@@ -13,26 +15,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const userCtxTTL = 5 * time.Minute
+
 // UserContextResolver fetches the full user context for an authenticated user.
 // Each service implements this interface in infra/resolver/identity.go by calling
 // the tais-identity internal endpoint:
 //
 //	GET {identityURL}/internal/users/{id}/context  (X-Internal-Token header)
 //
-// The result is cached in Redis under "user_ctx:{user_id}" (TTL 5 min).
+// The result is cached in Redis under "user_ctx:{user_id}" (TTL 5 min) by the
+// Required middleware — implementations should not cache themselves.
 type UserContextResolver interface {
 	Resolve(ctx context.Context, userID uint) (*pkgctx.UserCtx, error)
 }
 
-// Required is the standard JWT authentication middleware for staff routes.
+// Required is the standard JWT authentication middleware for all protected routes.
 //
-// It:
-//  1. Extracts the Bearer token from the Authorization header.
-//  2. Parses and validates the JWT signature + expiry.
-//  3. Checks the token JTI against the Redis blacklist (tais:blacklist:{jti}).
-//  4. Validates the IP subnet binding (ip_net claim vs actual client IP).
-//  5. Resolves the full UserCtx via the resolver (with Redis cache).
-//  6. Stores UserCtx in the Gin context (pkgctx.SetUser).
+// Flow:
+//  1. Extract "Authorization: Bearer {token}"
+//  2. Parse and validate JWT (HS256 signature + expiry)
+//  3. Check ip_net claim matches client /24 subnet (staff tokens only)
+//  4. Check Redis blacklist: tais:blacklist:{jti}  →  401 if found
+//  5. Load user context from Redis: user_ctx:{sub}
+//     cache miss → resolver.Resolve(ctx, sub) → cache SET user_ctx:{sub} EX 300
+//  6. Check is_active = true  →  403 ErrUserBlocked if false
+//  7. c.Set(pkgctx.KeyUser, userCtx)
 func Required(rdb *redis.Client, jwtCfg pkgjwt.Config, resolver UserContextResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractBearer(c)
@@ -47,9 +54,17 @@ func Required(rdb *redis.Client, jwtCfg pkgjwt.Config, resolver UserContextResol
 			return
 		}
 
+		// IP subnet binding (staff tokens only).
+		if !pkgjwt.CheckIPNet(claims, c.ClientIP()) {
+			pkgresp.Error(c, pkgerr.ErrUnauthorized)
+			return
+		}
+
+		ctx := c.Request.Context()
+
 		// Blacklist check.
 		blacklistKey := fmt.Sprintf("tais:blacklist:%s", claims.JTI)
-		exists, err := rdb.Exists(c.Request.Context(), blacklistKey).Result()
+		exists, err := rdb.Exists(ctx, blacklistKey).Result()
 		if err != nil {
 			pkgresp.Error(c, pkgerr.ErrInternal)
 			return
@@ -59,16 +74,16 @@ func Required(rdb *redis.Client, jwtCfg pkgjwt.Config, resolver UserContextResol
 			return
 		}
 
-		// IP subnet binding (staff tokens only).
-		if !pkgjwt.CheckIPNet(claims, c.ClientIP()) {
+		// Load user context — Redis first, then resolver on cache miss.
+		userCtx, err := loadUserCtx(ctx, rdb, claims.Sub, resolver)
+		if err != nil {
 			pkgresp.Error(c, pkgerr.ErrUnauthorized)
 			return
 		}
 
-		// Resolve full user context (Redis cache → identity service).
-		userCtx, err := resolver.Resolve(c.Request.Context(), claims.Sub)
-		if err != nil {
-			pkgresp.Error(c, pkgerr.ErrUnauthorized)
+		// Block check.
+		if !userCtx.IsActive {
+			pkgresp.Error(c, pkgerr.ErrUserBlocked)
 			return
 		}
 
@@ -79,6 +94,7 @@ func Required(rdb *redis.Client, jwtCfg pkgjwt.Config, resolver UserContextResol
 
 // InternalOnly restricts a route to internal service-to-service calls.
 // Compares the X-Internal-Token header against the configured token.
+// Mount on the /internal/* route group in router.go.
 func InternalOnly(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.GetHeader("X-Internal-Token") != token {
@@ -134,7 +150,39 @@ func CanAll(codes ...string) gin.HandlerFunc {
 	}
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── internal helpers ──────────────────────────────────────────────────────────
+
+// loadUserCtx loads user context from Redis cache.
+// On cache miss, calls the resolver, then caches the result for 5 minutes.
+func loadUserCtx(
+	ctx context.Context,
+	rdb *redis.Client,
+	userID uint,
+	resolver UserContextResolver,
+) (*pkgctx.UserCtx, error) {
+	cacheKey := fmt.Sprintf("user_ctx:%d", userID)
+
+	val, err := rdb.Get(ctx, cacheKey).Bytes()
+	if err == nil {
+		var u pkgctx.UserCtx
+		if jsonErr := json.Unmarshal(val, &u); jsonErr == nil {
+			return &u, nil
+		}
+	}
+
+	// Cache miss — resolve from identity service.
+	u, err := resolver.Resolve(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the resolved context.
+	if data, jsonErr := json.Marshal(u); jsonErr == nil {
+		_ = rdb.Set(ctx, cacheKey, data, userCtxTTL).Err()
+	}
+
+	return u, nil
+}
 
 func extractBearer(c *gin.Context) string {
 	header := c.GetHeader("Authorization")

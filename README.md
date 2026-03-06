@@ -55,30 +55,30 @@ msg := pkgi18n.Get("ErrVehicleNotFound", pkgi18n.LangRU)
 
 ---
 
-### `errors` — AppError
+### `errors` — AppError type
+
+HTTP-aware error type. Always carries an i18n code + HTTP status. Never wrap across layers.
 
 ```go
 import pkgerr "github.com/DC-TechHQ/tais-core/errors"
 
-// Common errors (pre-defined):
-pkgerr.ErrNotFound        // 404
-pkgerr.ErrAlreadyExists   // 409
-pkgerr.ErrInvalidData     // 400
-pkgerr.ErrForeignKey      // 400
-pkgerr.ErrUnauthorized    // 401
-pkgerr.ErrForbidden       // 403
-pkgerr.ErrInvalidToken    // 401
-pkgerr.ErrTokenExpired    // 401
-pkgerr.ErrUserBlocked     // 403
+// Service-level custom error
+var ErrVehicleNotFound = pkgerr.New(i18n.ErrVehicleNotFound, 404)
+
+// Common errors available:
+pkgerr.ErrInternal          // 500
+pkgerr.ErrInvalidData       // 400
+pkgerr.ErrNotFound          // 404
+pkgerr.ErrAlreadyExists     // 409
+pkgerr.ErrForeignKey        // 400
+pkgerr.ErrUnauthorized      // 401
+pkgerr.ErrForbidden         // 403
+pkgerr.ErrInvalidToken      // 401
+pkgerr.ErrTokenExpired      // 401
+pkgerr.ErrUserBlocked       // 403
 pkgerr.ErrInvalidCredentials // 401
-pkgerr.ErrDeadlock        // 409
-pkgerr.ErrInternal        // 500
-
-// Service-specific errors (defined in internal/errors/errors.go):
-var ErrVehicleNotFound = pkgerr.New("ErrVehicleNotFound", 404)
+pkgerr.ErrDeadlock          // 409
 ```
-
-**Rule:** never wrap `*AppError` across layers — it breaks `errors.As` matching.
 
 ---
 
@@ -170,15 +170,15 @@ q.Pagination(filter.Params).OrderBy("created_at", "desc").Build().Find(&ms)
 
 ---
 
-### `redis` — Redis client factory
+### `redis` — go-redis client
 
 ```go
 import pkgredis "github.com/DC-TechHQ/tais-core/redis"
 
 rdb, err := pkgredis.New(pkgredis.Config{
-    Addr:     "redis:6379",
-    Password: pkgcfg.ReadSecret("redis-password"),
-    DB:       0,
+    Addr:     cfg.Redis.Addr,
+    Password: cfg.Redis.Password,
+    DB:       cfg.Redis.DB,
 }, log)
 ```
 
@@ -212,49 +212,57 @@ tais-audit subscribes `tais.>` to capture all events.
 
 ### `jwt` — Token parsing
 
+tais-core **only parses** JWT tokens. Signing is done exclusively by `tais-auth`.
+
 ```go
 import pkgjwt "github.com/DC-TechHQ/tais-core/jwt"
 
-// Parse and validate (tais-auth issues, all other services parse):
-claims, err := pkgjwt.Parse(tokenStr, pkgjwt.Config{
-    Secret: pkgcfg.MustReadSecret("jwt-secret"),
-})
+cfg := pkgjwt.Config{Secret: cfg.JWT.Secret}
 
-// Sign (tais-auth only):
-token, err := pkgjwt.Sign(&pkgjwt.Claims{
-    Sub:   user.ID,
-    Type:  pkgjwt.TypeStaff,
-    IpNet: "10.200.1",  // first 3 octets — staff only
-    JTI:   uuid.NewString(),
-}, cfg)
+// Parse + validate HS256 signature and expiry
+claims, err := pkgjwt.Parse(tokenStr, cfg)
 
-// IP subnet check (staff tokens only, citizens always pass):
-if !pkgjwt.CheckIPNet(claims, c.ClientIP()) { ... }
+// claims.Sub    — user ID
+// claims.Type   — "staff" | "citizen"
+// claims.IpNet  — "10.200.1" (staff only)
+// claims.JTI    — unique token ID
+
+// Check IP /24 subnet binding (staff only)
+if !pkgjwt.CheckIPNet(claims, clientIP) {
+    // reject
+}
 ```
-
-**Claims:** `Sub` (user ID), `Type` (staff|citizen), `IpNet` (/24 subnet), `JTI` (blacklist key).
-**Algorithm:** HS256 only.
 
 ---
 
-### `context` — UserCtx
+### `context` — User context
 
 ```go
 import pkgctx "github.com/DC-TechHQ/tais-core/context"
 
-// In middleware (after auth):
-pkgctx.SetUser(c, userCtx)
+// In handler — retrieve authenticated user
+u, ok := pkgctx.GetUser(c)       // returns (nil, false) if unauthenticated
+u := pkgctx.MustGetUser(c)       // panics if not set — use only after Required middleware
 
-// In handlers and use cases:
-u, ok := pkgctx.GetUser(c)     // returns (nil, false) if unauthenticated
-u    := pkgctx.MustGetUser(c)  // panics if not set — only on protected routes
-
-// Permission check:
+// Permission check (super_admin always passes, "*" wildcard for admin)
 if pkgctx.HasPermission(u, "vehicle:read") { ... }
-// super_admin → always true
-// admin (permissions: ["*"]) → always true
-// others → exact match in u.Permissions slice
 ```
+
+`UserCtx` fields:
+
+| Field           | Type      | Description                           |
+|-----------------|-----------|---------------------------------------|
+| `ID`            | `uint`    | User ID                               |
+| `Type`          | `string`  | `"staff"` \| `"citizen"`             |
+| `IsSuperAdmin`  | `bool`    | Bypasses all permission checks        |
+| `IsActive`      | `bool`    | False → 403 ErrUserBlocked            |
+| `Roles`         | `[]string`| Named roles (e.g. `"inspector"`)      |
+| `Permissions`   | `[]string`| Permission codes + `"*"` wildcard     |
+| `DeptID`        | `*uint`   | Department scope (optional)           |
+| `RegionID`      | `*uint`   | Region scope (optional)               |
+| `DLAuthorityID` | `*uint`   | DL authority scope (optional)         |
+| `IpNet`         | `string`  | JWT /24 subnet (`"10.200.1"`)         |
+| `JTI`           | `string`  | JWT ID (blacklist reference)          |
 
 ---
 
@@ -281,17 +289,6 @@ internal.Use(pkgmw.InternalOnly(cfg.InternalToken))
 
 **`UserContextResolver` interface** — implemented per-service in `infra/resolver/identity.go`:
 
-```go
-type UserContextResolver interface {
-    Resolve(ctx context.Context, userID uint) (*pkgctx.UserCtx, error)
-}
-// Implementation calls: GET {identityURL}/internal/users/{id}/context
-// Result cached in Redis: user_ctx:{user_id} TTL 5 min
-```
-
----
-
-### `response` — HTTP response helpers
 
 All responses follow a single envelope format.
 
@@ -319,12 +316,21 @@ pkgresp.ErrorWithData(c, err, data)       // same + extra data (e.g. validation 
 ```
 
 **Validation error example:**
+### `middleware` — HTTP middleware
+
 ```go
-pkgresp.ErrorWithData(c, pkgerr.ErrInvalidData, []pkgresp.ValidationError{
-    {Field: "vin",          Message: "invalid format"},
-    {Field: "plate_number", Message: "already registered"},
-})
-```
+import pkgmw "github.com/DC-TechHQ/tais-core/middleware"
+
+// In router.go — wire once
+auth := pkgmw.Required(ctn.Redis, ctn.Config.JWT, ctn.Resolver)
+
+v1 := r.Group("/api/v1")
+
+// Staff routes
+vehicles := v1.Group("/vehicles")
+vehicles.Use(auth, pkgmw.StaffOnly())
+vehicles.GET("/:id",  pkgmw.Can("vehicle:read"),     handler.Get)
+vehicles.POST("",     pkgmw.Can("vehicle:register"), handler.Create)
 
 **Paginated response:**
 ```json
@@ -333,20 +339,45 @@ pkgresp.ErrorWithData(c, pkgerr.ErrInvalidData, []pkgresp.ValidationError{
   "data": [...],
   "pagination": { "page": 1, "limit": 20, "total": 500, "total_pages": 25 }
 }
+// Citizen routes
+portal := v1.Group("/portal")
+portal.Use(auth, pkgmw.CitizenOnly())
+portal.GET("/my-vehicles", handler.GetMine)
+
+// Internal service-to-service routes (NOT exposed via Traefik)
+internal := r.Group("/internal")
+internal.Use(pkgmw.InternalOnly(ctn.Config.InternalToken))
+internal.GET("/vehicles/:id", handler.GetInternal)
+
+// Global middleware (register before routes)
+r.Use(pkgmw.Recovery(log))
+r.Use(pkgmw.RequestLogger(log))
+r.Use(pkgmw.CORS(cfg.HTTP.CORSOrigins))
 ```
 
----
+**`Required` middleware flow:**
+1. Extract `Authorization: Bearer {token}`
+2. Parse + validate JWT (HS256 signature + expiry)
+3. Check `ip_net` claim vs client /24 subnet (staff only)
+4. Check Redis blacklist: `tais:blacklist:{jti}` → 401 if found
+5. Load `user_ctx:{sub}` from Redis (cache miss → `resolver.Resolve` → cache SET EX 300)
+6. Check `is_active` → 403 ErrUserBlocked if false
+7. `c.Set(pkgctx.KeyUser, userCtx)`
 
-### `pagination` — Query parameter parsing
+**`UserContextResolver`** — implemented per-service in `infra/resolver/identity.go`:
 
 ```go
-import pkgpage "github.com/DC-TechHQ/tais-core/pagination"
+// internal/infra/resolver/identity.go
+type identityResolver struct {
+    url   string
+    token string
+}
 
-params := pkgpage.Parse(c) // ?page=2&limit=10
-// params.Page   = 2
-// params.Limit  = 10
-// params.Offset = 10
-// Defaults: page=1, limit=20. Cap: limit=100. Invalid values → defaults.
+func (r *identityResolver) Resolve(ctx context.Context, userID uint) (*pkgctx.UserCtx, error) {
+    // GET {r.url}/internal/users/{userID}/context
+    // X-Internal-Token: {r.token}
+    // → unmarshal into *pkgctx.UserCtx
+}
 ```
 
 ---
@@ -394,45 +425,33 @@ pkgevent "github.com/DC-TechHQ/tais-core/event"
 
 ---
 
-## Rules (non-negotiable)
+## Development usage (before tagging v0.1.0)
 
-1. **Never copy-paste** code from tais-core into services — import it.
-2. **Never import service code** into tais-core — this is a leaf dependency.
-3. **TranslateError always receives `log`** — logging is done inside, never before calling it.
-4. **Never wrap `*AppError`** across layers — `errors.As` matching breaks.
-5. **Cache miss returns `nil, nil`** — never an error.
-6. **All error responses include TJ + RU + EN** translations.
-7. **Log at repository layer** — handlers and use cases call `pkgresp.Error(c, err)`, never log there.
-8. **GORM models never leave `infra/`** — mapper converts to/from domain entity.
+```go
+// In service go.mod — use replace directive while developing locally
+require github.com/DC-TechHQ/tais-core v0.0.0
 
----
-
-## Running tests
-
-```bash
-go test ./...
-
-# With verbose output:
-go test ./... -v
-
-# Single package:
-go test ./db/... -v
-go test ./jwt/... -v
-go test ./response/... -v
-```
-
-> Tests requiring a real PostgreSQL or Redis instance are integration tests and are skipped in CI unless the `INTEGRATION` env var is set.
-
----
-
-## Local development
-
-This is a **library** — it has no `main.go`, no HTTP server, no port.
-To use locally in a service during development:
-
-```bash
-# In the service's go.mod:
 replace github.com/DC-TechHQ/tais-core => ../tais-core
 ```
 
-Remove the `replace` directive before pushing to CI.
+After tagging:
+```bash
+go get github.com/DC-TechHQ/tais-core@v0.1.0
+```
+
+Private module — all services must set:
+```bash
+export GOPRIVATE=github.com/DC-TechHQ/*
+```
+
+---
+
+## Tests
+
+```bash
+cd tais-core
+go test ./...
+```
+
+All packages with business logic have unit tests. Integration tests (real PostgreSQL, Redis, NATS)
+are run in each service's own test suite.

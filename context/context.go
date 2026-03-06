@@ -4,25 +4,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCtxKey = "user_ctx"
+// KeyUser is the Gin context key under which UserCtx is stored.
+// Exported so services can reference it directly if needed.
+const KeyUser = "tais_user"
 
-// UserCtx holds the authenticated user's identity and permissions.
-// Populated by the auth middleware via UserContextResolver and cached in Redis.
+// UserCtx holds the authenticated user's full identity, roles, and permissions.
+// Populated by the Required middleware: loaded from Redis cache, or resolved via
+// the UserContextResolver on cache miss, then stored back to Redis (TTL 5 min).
 type UserCtx struct {
-	ID          uint     `json:"id"`
-	RoleID      uint     `json:"role_id"`
-	RoleName    string   `json:"role_name"`
-	RegionID    *uint    `json:"region_id,omitempty"`
-	DeptID      *uint    `json:"dept_id,omitempty"`
-	SuperAdmin  bool     `json:"super_admin"`
-	Admin       bool     `json:"admin"`
-	Permissions []string `json:"permissions"`
+	ID            uint     `json:"id"`
+	Type          string   `json:"type"` // "staff" | "citizen"
+	IsSuperAdmin  bool     `json:"is_super_admin"`
+	IsActive      bool     `json:"is_active"`
+	Roles         []string `json:"roles"`
+	Permissions   []string `json:"permissions"`
+	DeptID        *uint    `json:"dept_id,omitempty"`
+	RegionID      *uint    `json:"region_id,omitempty"`
+	DLAuthorityID *uint    `json:"dl_authority_id,omitempty"`
+	IpNet         string   `json:"ip_net,omitempty"` // staff only: "10.200.1"
+	JTI           string   `json:"jti"`              // JWT ID — used for blacklist lookup
 }
 
 // GetUser returns the UserCtx stored in the Gin context.
-// Returns (nil, false) if the context is not populated (i.e. unauthenticated route).
+// Returns (nil, false) if not populated (unauthenticated route).
 func GetUser(c *gin.Context) (*UserCtx, bool) {
-	val, exists := c.Get(userCtxKey)
+	val, exists := c.Get(KeyUser)
 	if !exists {
 		return nil, false
 	}
@@ -31,7 +37,7 @@ func GetUser(c *gin.Context) (*UserCtx, bool) {
 }
 
 // MustGetUser returns the UserCtx or panics.
-// Use only on routes protected by the auth middleware.
+// Use only on routes guaranteed to be behind the Required middleware.
 func MustGetUser(c *gin.Context) *UserCtx {
 	u, ok := GetUser(c)
 	if !ok {
@@ -43,14 +49,13 @@ func MustGetUser(c *gin.Context) *UserCtx {
 // SetUser stores the UserCtx in the Gin context.
 // Called exclusively by the auth middleware.
 func SetUser(c *gin.Context, u *UserCtx) {
-	c.Set(userCtxKey, u)
+	c.Set(KeyUser, u)
 }
 
-// HasPermission returns true if the user has the given permission code,
-// or if the user is super_admin (bypasses all checks),
-// or if the user is admin and has the wildcard permission "*".
+// HasPermission returns true if the user has the given permission code.
+// super_admin always passes. The wildcard "*" grants all permissions (admin role).
 func HasPermission(u *UserCtx, code string) bool {
-	if u.SuperAdmin {
+	if u.IsSuperAdmin {
 		return true
 	}
 	for _, p := range u.Permissions {
