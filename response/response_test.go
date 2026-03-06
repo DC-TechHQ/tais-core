@@ -21,7 +21,7 @@ func newContext() (*gin.Context, *httptest.ResponseRecorder) {
 
 func TestOK(t *testing.T) {
 	c, w := newContext()
-	response.OK(c, map[string]string{"key": "value"})
+	response.OK(c, "user", map[string]string{"name": "John"})
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
@@ -31,17 +31,28 @@ func TestOK(t *testing.T) {
 	if body["success"] != true {
 		t.Error("expected success=true")
 	}
-	if body["data"] == nil {
-		t.Error("expected data to be non-nil")
+	if body["user"] == nil {
+		t.Error("expected 'user' key to be non-nil")
+	}
+	if body["data"] != nil {
+		t.Error("must not contain generic 'data' key")
 	}
 }
 
 func TestCreated(t *testing.T) {
 	c, w := newContext()
-	response.Created(c, map[string]int{"id": 1})
+	response.Created(c, "vehicle", map[string]int{"id": 42})
 
 	if w.Code != http.StatusCreated {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusCreated)
+	}
+	var body map[string]any
+	json.NewDecoder(w.Body).Decode(&body)
+	if body["vehicle"] == nil {
+		t.Error("expected 'vehicle' key to be non-nil")
+	}
+	if body["data"] != nil {
+		t.Error("must not contain generic 'data' key")
 	}
 }
 
@@ -56,7 +67,7 @@ func TestNoContent(t *testing.T) {
 
 func TestPaginated(t *testing.T) {
 	c, w := newContext()
-	response.Paginated(c, []string{"a", "b"}, 25, 2, 10)
+	response.Paginated(c, "users", []string{"a", "b"}, 25, 2, 10)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
@@ -68,8 +79,11 @@ func TestPaginated(t *testing.T) {
 	if body["success"] != true {
 		t.Error("expected success=true")
 	}
-	if body["data"] == nil {
-		t.Error("expected data to be non-nil")
+	if body["users"] == nil {
+		t.Error("expected 'users' key to be non-nil")
+	}
+	if body["data"] != nil {
+		t.Error("must not contain generic 'data' key")
 	}
 
 	meta, ok := body["meta"].(map[string]any)
@@ -93,13 +107,16 @@ func TestPaginated(t *testing.T) {
 
 func TestPaginated_NoPaginationKey(t *testing.T) {
 	c, w := newContext()
-	response.Paginated(c, []any{}, 0, 1, 20)
+	response.Paginated(c, "items", []any{}, 0, 1, 20)
 
 	var body map[string]any
 	json.NewDecoder(w.Body).Decode(&body)
 
 	if _, exists := body["pagination"]; exists {
 		t.Error("response must use 'meta' key, not 'pagination'")
+	}
+	if _, exists := body["data"]; exists {
+		t.Error("response must not contain generic 'data' key")
 	}
 }
 
@@ -118,7 +135,7 @@ func TestPaginated_TotalPagesCalculation(t *testing.T) {
 
 	for _, tc := range cases {
 		c, w := newContext()
-		response.Paginated(c, []any{}, tc.total, 1, tc.limit)
+		response.Paginated(c, "items", []any{}, tc.total, 1, tc.limit)
 
 		var body map[string]any
 		json.NewDecoder(w.Body).Decode(&body)

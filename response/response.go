@@ -11,27 +11,9 @@ import (
 
 // ── envelope types ────────────────────────────────────────────────────────────
 
-// successBody is the standard success envelope.
+// paginatedMeta is the standard pagination metadata block.
 //
-//	{ "success": true, "data": {...} }
-type successBody struct {
-	Success bool `json:"success"`
-	Data    any  `json:"data"`
-}
-
-// paginatedBody is the standard list + pagination envelope.
-//
-//	{
-//	  "success": true,
-//	  "data": [...],
-//	  "meta": { "total": 500, "page": 2, "limit": 20, "total_pages": 25 }
-//	}
-type paginatedBody struct {
-	Success bool          `json:"success"`
-	Data    any           `json:"data"`
-	Meta    paginatedMeta `json:"meta"`
-}
-
+//	{ "total": 500, "page": 2, "limit": 20, "total_pages": 25 }
 type paginatedMeta struct {
 	Total      int64 `json:"total"`
 	Page       int   `json:"page"`
@@ -80,14 +62,20 @@ type ValidationError struct {
 
 // ── public helpers ────────────────────────────────────────────────────────────
 
-// OK responds with HTTP 200 and data wrapped in the success envelope.
-func OK(c *gin.Context, data any) {
-	c.JSON(http.StatusOK, successBody{Success: true, Data: data})
+// OK responds with HTTP 200 using a named key for the payload.
+//
+//	response.OK(c, "user", dto)
+//	→ {"success": true, "user": {...}}
+func OK(c *gin.Context, key string, data any) {
+	c.JSON(http.StatusOK, namedBody(key, data))
 }
 
-// Created responds with HTTP 201 and data wrapped in the success envelope.
-func Created(c *gin.Context, data any) {
-	c.JSON(http.StatusCreated, successBody{Success: true, Data: data})
+// Created responds with HTTP 201 using a named key for the payload.
+//
+//	response.Created(c, "vehicle", dto)
+//	→ {"success": true, "vehicle": {...}}
+func Created(c *gin.Context, key string, data any) {
+	c.JSON(http.StatusCreated, namedBody(key, data))
 }
 
 // NoContent responds with HTTP 204 (no body).
@@ -95,24 +83,27 @@ func NoContent(c *gin.Context) {
 	c.AbortWithStatus(http.StatusNoContent)
 }
 
-// Paginated responds with HTTP 200, the data slice, and pagination metadata.
+// Paginated responds with HTTP 200, a named list key, and pagination metadata.
 //
-//	response.Paginated(c, vehicles, total, page, limit)
-func Paginated(c *gin.Context, data any, total int64, page, limit int) {
+//	response.Paginated(c, "users", items, total, page, limit)
+//	→ {"success": true, "users": [...], "meta": {"total":500,"page":2,"limit":20,"total_pages":25}}
+func Paginated(c *gin.Context, key string, data any, total int64, page, limit int) {
 	totalPages := 0
 	if limit > 0 && total > 0 {
 		totalPages = int((total + int64(limit) - 1) / int64(limit))
 	}
-	c.JSON(http.StatusOK, paginatedBody{
-		Success: true,
-		Data:    data,
-		Meta: paginatedMeta{
+
+	body := gin.H{
+		"success": true,
+		key:       data,
+		"meta": paginatedMeta{
 			Total:      total,
 			Page:       page,
 			Limit:      limit,
 			TotalPages: totalPages,
 		},
-	})
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // Error maps an error to an HTTP status and responds with the trilingual error envelope.
@@ -144,4 +135,14 @@ func ErrorWithData(c *gin.Context, err error, data any) {
 			Data: data,
 		},
 	})
+}
+
+// ── internal helpers ──────────────────────────────────────────────────────────
+
+// namedBody builds a {"success": true, key: data} map for OK/Created responses.
+func namedBody(key string, data any) gin.H {
+	return gin.H{
+		"success": true,
+		key:       data,
+	}
 }

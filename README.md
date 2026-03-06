@@ -273,12 +273,12 @@ All responses follow the same JSON structure. All error messages contain TJ + RU
 ```go
 import pkgresp "github.com/DC-TechHQ/tais-core/response"
 
-pkgresp.OK(c, data)                              // 200 {"success":true,"data":{...}}
-pkgresp.Created(c, data)                         // 201 {"success":true,"data":{...}}
-pkgresp.NoContent(c)                             // 204
+pkgresp.OK(c, "user", dto)                               // 200 {"success":true,"user":{...}}
+pkgresp.Created(c, "vehicle", dto)                       // 201 {"success":true,"vehicle":{...}}
+pkgresp.NoContent(c)                                     // 204
 
-pkgresp.Paginated(c, items, total, page, limit)  // 200 {"success":true,"data":[...],"meta":{...}}
-// meta: {"total":500,"page":2,"limit":20,"total_pages":25}
+pkgresp.Paginated(c, "users", items, total, page, limit) // 200
+// {"success":true,"users":[...],"meta":{"total":500,"page":2,"limit":20,"total_pages":25}}
 
 pkgresp.Error(c, err)                            // auto-mapped status
 // {"success":false,"error":{"code":"ErrNotFound","message":{"tj":"...","ru":"...","en":"..."}}}
