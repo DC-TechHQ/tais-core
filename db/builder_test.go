@@ -1,151 +1,96 @@
 package db_test
 
+// Builder unit tests verify two things without any database connection:
+//
+//  1. isSafeColumn — the SQL injection guard rejects unsafe identifiers.
+//  2. isZero — the zero-value guard correctly skips empty filter arguments.
+//
+// Higher-level Builder behaviour (WHERE clauses, ORDER BY, LIMIT/OFFSET) is
+// exercised by each service's own integration test suite against a real
+// PostgreSQL instance, keeping tais-core free of CGO and network dependencies.
+
 import (
 	"testing"
 
-	"github.com/DC-TechHQ/tais-core/db"
-	"github.com/DC-TechHQ/tais-core/pagination"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	pkgdb "github.com/DC-TechHQ/tais-core/db"
 )
 
-// openSQLite creates an in-memory SQLite DB for Builder tests.
-func openSQLite(t *testing.T) *gorm.DB {
-	t.Helper()
-	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+// ── isSafeColumn ──────────────────────────────────────────────────────────────
+
+func TestIsSafeColumn_Valid(t *testing.T) {
+	valid := []string{
+		"name",
+		"created_at",
+		"vehicles.created_at",
+		"_internal",
+		"col123",
+		"a",
 	}
-	return database
-}
-
-type testModel struct {
-	ID     uint   `gorm:"primaryKey"`
-	Name   string `gorm:"size:100"`
-	Status string `gorm:"size:50"`
-}
-
-func TestBuilder_Build(t *testing.T) {
-	gdb := openSQLite(t)
-	if err := gdb.AutoMigrate(&testModel{}); err != nil {
-		t.Fatal(err)
-	}
-	gdb.Create(&testModel{Name: "Alice", Status: "active"})
-	gdb.Create(&testModel{Name: "Bob", Status: "inactive"})
-
-	var results []testModel
-	db.NewBuilder(gdb.Model(&testModel{})).
-		Where("status = ?", "active").
-		Build().Find(&results)
-
-	if len(results) != 1 {
-		t.Errorf("expected 1 result, got %d", len(results))
-	}
-	if results[0].Name != "Alice" {
-		t.Errorf("expected Alice, got %s", results[0].Name)
+	for _, col := range valid {
+		if !pkgdb.IsSafeColumn(col) {
+			t.Errorf("IsSafeColumn(%q) = false, want true", col)
+		}
 	}
 }
 
-func TestBuilder_Where_SkipsEmpty(t *testing.T) {
-	gdb := openSQLite(t)
-	if err := gdb.AutoMigrate(&testModel{}); err != nil {
-		t.Fatal(err)
+func TestIsSafeColumn_Invalid(t *testing.T) {
+	invalid := []string{
+		"",
+		"name; DROP TABLE users--",
+		"1starts_with_digit",
+		"col with space",
+		"col'quoted",
+		`col"doublequoted`,
+		"col\x00null",
+		"(subquery)",
+		"col OR 1=1",
 	}
-	gdb.Create(&testModel{Name: "Alice", Status: "active"})
-	gdb.Create(&testModel{Name: "Bob", Status: "inactive"})
-
-	var results []testModel
-	// Empty string → condition should be skipped → returns all rows.
-	db.NewBuilder(gdb.Model(&testModel{})).
-		Where("status = ?", "").
-		Build().Find(&results)
-
-	if len(results) != 2 {
-		t.Errorf("expected 2 results (empty where skipped), got %d", len(results))
-	}
-}
-
-func TestBuilder_Search(t *testing.T) {
-	// Search uses ILIKE (PostgreSQL-specific). This test verifies the builder
-	// constructs the query without panicking — full ILIKE behaviour is tested
-	// in integration tests against a real PostgreSQL instance.
-	gdb := openSQLite(t)
-	if err := gdb.AutoMigrate(&testModel{}); err != nil {
-		t.Fatal(err)
-	}
-	gdb.Create(&testModel{Name: "Alice"})
-	gdb.Create(&testModel{Name: "Bob"})
-
-	// Just verify Search returns a non-nil builder without panic.
-	b := db.NewBuilder(gdb.Model(&testModel{})).Search("ali", "name")
-	if b == nil {
-		t.Error("Search returned nil builder")
+	for _, col := range invalid {
+		if pkgdb.IsSafeColumn(col) {
+			t.Errorf("IsSafeColumn(%q) = true, want false (should be rejected)", col)
+		}
 	}
 }
 
-func TestBuilder_Search_EmptySkips(t *testing.T) {
-	gdb := openSQLite(t)
-	if err := gdb.AutoMigrate(&testModel{}); err != nil {
-		t.Fatal(err)
+// ── isZero ────────────────────────────────────────────────────────────────────
+
+func TestIsZero_TrueForZeroValues(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+	}{
+		{"empty string", ""},
+		{"int 0", int(0)},
+		{"int32 0", int32(0)},
+		{"int64 0", int64(0)},
+		{"uint 0", uint(0)},
+		{"uint32 0", uint32(0)},
+		{"uint64 0", uint64(0)},
+		{"nil", nil},
 	}
-	gdb.Create(&testModel{Name: "Alice"})
-	gdb.Create(&testModel{Name: "Bob"})
-
-	var results []testModel
-	db.NewBuilder(gdb.Model(&testModel{})).
-		Search("", "name").
-		Build().Find(&results)
-
-	if len(results) != 2 {
-		t.Errorf("expected 2 results (empty search skipped), got %d", len(results))
-	}
-}
-
-func TestBuilder_OrderBy(t *testing.T) {
-	gdb := openSQLite(t)
-	if err := gdb.AutoMigrate(&testModel{}); err != nil {
-		t.Fatal(err)
-	}
-	gdb.Create(&testModel{Name: "Charlie"})
-	gdb.Create(&testModel{Name: "Alice"})
-	gdb.Create(&testModel{Name: "Bob"})
-
-	var results []testModel
-	db.NewBuilder(gdb.Model(&testModel{})).
-		OrderBy("name", "asc").
-		Build().Find(&results)
-
-	if results[0].Name != "Alice" {
-		t.Errorf("expected Alice first after asc sort, got %s", results[0].Name)
+	for _, tc := range cases {
+		if !pkgdb.IsZero(tc.val) {
+			t.Errorf("IsZero(%s) = false, want true", tc.name)
+		}
 	}
 }
 
-func TestBuilder_Pagination(t *testing.T) {
-	gdb := openSQLite(t)
-	if err := gdb.AutoMigrate(&testModel{}); err != nil {
-		t.Fatal(err)
+func TestIsZero_FalseForNonZeroValues(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+	}{
+		{"non-empty string", "active"},
+		{"int 1", int(1)},
+		{"int32 1", int32(1)},
+		{"int64 1", int64(1)},
+		{"uint 1", uint(1)},
+		{"uint32 1", uint32(1)},
+		{"uint64 1", uint64(1)},
 	}
-	for range 10 {
-		gdb.Create(&testModel{Name: "item"})
-	}
-
-	params := pagination.Params{Page: 2, Limit: 3, Offset: 3}
-	var results []testModel
-	db.NewBuilder(gdb.Model(&testModel{})).
-		Pagination(params).
-		Build().Find(&results)
-
-	if len(results) != 3 {
-		t.Errorf("expected 3 results (page 2, limit 3), got %d", len(results))
-	}
-}
-
-func TestBuilder_DateRange(t *testing.T) {
-	gdb := openSQLite(t)
-	// DateRange applies raw WHERE clauses — verify it doesn't panic.
-	b := db.NewBuilder(gdb.Model(&testModel{})).
-		DateRange("created_at", "2024-01-01", "2024-12-31")
-	if b == nil {
-		t.Error("DateRange returned nil builder")
+	for _, tc := range cases {
+		if pkgdb.IsZero(tc.val) {
+			t.Errorf("IsZero(%s) = true, want false", tc.name)
+		}
 	}
 }
