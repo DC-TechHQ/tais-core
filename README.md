@@ -186,27 +186,26 @@ Key namespace convention: `tais:{service}:{entity}:{id}`
 
 ---
 
-### `nats` — NATS JetStream
+### `nats` — JetStream
+
+tais-core only parses/publishes. tais-auth owns stream configuration.
 
 ```go
 import pkgnats "github.com/DC-TechHQ/tais-core/nats"
 
-nc, js, err := pkgnats.Connect(pkgnats.Config{
-    URL:   "nats://nats:4222",
-    Token: pkgcfg.ReadSecret("nats-token"),
+// Connect
+nc, js, err := pkgnats.Connect(pkgnats.Config{URL: cfg.NATS.URL}, log)
+defer nc.Drain()
+
+// Publish — marshals to JSON internally
+err = pkgnats.Publish(js, "tais.vehicle.vehicle.created", payload, log)
+
+// Subscribe — durable consumer with panic recovery
+pkgnats.Subscribe(js, "tais.vehicle.>", "tais-audit-consumer", func(msg *nats.Msg) {
+    // process msg.Data
+    msg.Ack()
 }, log)
-defer nc.Close()
-
-// Fire-and-forget publish (use js.Publish for durable):
-pkgnats.Publish(nc, "tais.vehicle.vehicle.created", payload)
-
-// Subscribe:
-pkgnats.Subscribe(nc, "tais.vehicle.>", handler)
 ```
-
-Subject convention: `tais.{service}.{entity}.{event}`
-Stream: `TAIS_EVENTS`
-tais-audit subscribes `tais.>` to capture all events.
 
 ---
 
@@ -360,26 +359,34 @@ func (r *identityResolver) Resolve(ctx context.Context, userID uint) (*pkgctx.Us
 
 ---
 
-### `event` — NATS event envelope
+### `event` — Domain events
 
 ```go
 import pkgevent "github.com/DC-TechHQ/tais-core/event"
 
-type VehicleCreatedEvent struct {
+// Build subject
+subj := pkgevent.Subject("registration", "vehicle", "registered")
+// → "tais.registration.vehicle.registered"
+
+// Create event — embed in service-level struct
+type VehicleRegisteredEvent struct {
     pkgevent.BaseEvent
     VehicleID uint   `json:"vehicle_id"`
     VIN       string `json:"vin"`
 }
 
-ev := VehicleCreatedEvent{
-    BaseEvent: pkgevent.New("tais-vehicle", "vehicle", "vehicle", "created", actorID),
+actorID := u.ID
+ev := VehicleRegisteredEvent{
+    BaseEvent: pkgevent.New(subj, "tais-registration", &actorID, nil),
     VehicleID: v.ID,
     VIN:       v.VIN,
 }
-// ev.Subject = "tais.vehicle.vehicle.created"
-// ev.ID      = unique nano-timestamp ID
-// ev.OccurredAt = time.Now().UTC()
+
+// Publish via nats
+pkgnats.Publish(js, subj, ev, log)
 ```
+
+`BaseEvent` fields: `id` (UUID), `subject`, `service`, `actor_id` (`nil` for system events), `occurred_at`, `payload`.
 
 ---
 

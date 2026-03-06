@@ -3,52 +3,70 @@ package event
 import (
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// BaseEvent is embedded in all domain events published to NATS JetStream.
+// BaseEvent is the standard envelope for every domain event published to NATS JetStream.
+//
 // Subject format: tais.{service}.{entity}.{event}
-// Stream: TAIS_EVENTS
+// Stream:         TAIS_EVENTS
+//
+// Embed BaseEvent in every service-level event struct:
+//
+//	type VehicleRegisteredEvent struct {
+//	    pkgevent.BaseEvent
+//	    VehicleID uint   `json:"vehicle_id"`
+//	    VIN       string `json:"vin"`
+//	}
+//
+//	subj := pkgevent.Subject("registration", "vehicle", "registered")
+//	ev := VehicleRegisteredEvent{
+//	    BaseEvent: pkgevent.New(subj, "tais-registration", &actorID, payload),
+//	    VehicleID: v.ID,
+//	    VIN:       v.VIN,
+//	}
 type BaseEvent struct {
-	// ID is a unique event identifier (UUID). Used for deduplication.
+	// ID is a UUID v4 — unique event identifier used for deduplication in tais-audit.
 	ID string `json:"id"`
 
 	// Subject is the NATS subject this event was published on.
 	// e.g. "tais.vehicle.vehicle.created"
 	Subject string `json:"subject"`
 
+	// Service identifies the publishing service name (e.g. "tais-vehicle").
+	Service string `json:"service"`
+
+	// ActorID is the staff user ID who triggered the event.
+	// Nil for system-generated events (migrations, scheduled jobs).
+	ActorID *uint `json:"actor_id"`
+
 	// OccurredAt is the UTC timestamp when the event was created.
 	OccurredAt time.Time `json:"occurred_at"`
 
-	// ActorID is the user ID who triggered the event (0 for system events).
-	ActorID uint `json:"actor_id,omitempty"`
-
-	// ServiceName identifies the publishing service (e.g. "tais-vehicle").
-	ServiceName string `json:"service_name"`
+	// Payload holds the event-specific data.
+	Payload any `json:"payload"`
 }
 
-// New creates a BaseEvent with subject and metadata populated.
-// payload is set by each concrete event type.
+// New creates a BaseEvent with all metadata populated.
+// Pass nil for actorID on system-generated events.
 //
-//	ev := event.New("tais-vehicle", "vehicle", "vehicle", "created", actorID)
-func New(serviceName, service, entity, eventType string, actorID uint) BaseEvent {
+//	subj := pkgevent.Subject("vehicle", "vehicle", "created")
+//	base := pkgevent.New(subj, "tais-vehicle", &actorID, payload)
+func New(subject, service string, actorID *uint, payload any) BaseEvent {
 	return BaseEvent{
-		ID:          newID(),
-		Subject:     Subject(service, entity, eventType),
-		OccurredAt:  time.Now().UTC(),
-		ActorID:     actorID,
-		ServiceName: serviceName,
+		ID:         uuid.New().String(),
+		Subject:    subject,
+		Service:    service,
+		ActorID:    actorID,
+		OccurredAt: time.Now().UTC(),
+		Payload:    payload,
 	}
 }
 
-// Subject builds a NATS subject following the tais naming convention.
+// Subject builds a NATS subject following the TAIS naming convention.
 //
 //	Subject("vehicle", "vehicle", "created") → "tais.vehicle.vehicle.created"
 func Subject(service, entity, eventType string) string {
 	return fmt.Sprintf("tais.%s.%s.%s", service, entity, eventType)
-}
-
-// newID generates a simple unique ID using timestamp + random suffix.
-// In production services, replace with github.com/google/uuid if available.
-func newID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
