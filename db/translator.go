@@ -47,8 +47,7 @@ func TranslateError(err error, log *logger.Logger) error {
 	}
 
 	// PostgreSQL SQLSTATE codes.
-	var pgErr *pgconn.PgError
-	if stderrors.As(err, &pgErr) {
+	if pgErr, ok := stderrors.AsType[*pgconn.PgError](err); ok {
 		log.Error("db: sql error",
 			"pg_code", pgErr.Code,
 			"pg_message", pgErr.Message,
