@@ -277,18 +277,9 @@ params := pkgpage.Parse(c)
 // Defaults: page=1, limit=20. Max limit: 100.
 ```
 
-auth := pkgmw.Required(rdb, cfg.JWT, resolver) // JWT auth + blacklist + IP check + user ctx
+---
 
-// Route guards:
-v.GET("/:id", auth, pkgmw.Can("vehicle:read"),     handler.Get)
-v.POST("",    auth, pkgmw.Can("vehicle:register"), handler.Create)
-v.GET("",     auth, pkgmw.CanAny("vehicle:read", "vehicle:register"), handler.List)
-
-// Internal service-to-service routes (not exposed via Traefik):
-internal.Use(pkgmw.InternalOnly(cfg.InternalToken))
-```
-
-**`UserContextResolver` interface** — implemented per-service in `infra/resolver/identity.go`:
+### `response` — HTTP envelopes
 
 All responses follow the same JSON structure. All error messages contain TJ + RU + EN.
 
