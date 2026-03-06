@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	pkgerr "github.com/DC-TechHQ/tais-core/errors"
-	"github.com/DC-TechHQ/tais-core/pagination"
 	"github.com/DC-TechHQ/tais-core/response"
 	"github.com/gin-gonic/gin"
 )
@@ -57,8 +56,7 @@ func TestNoContent(t *testing.T) {
 
 func TestPaginated(t *testing.T) {
 	c, w := newContext()
-	params := pagination.Params{Page: 2, Limit: 10, Offset: 10}
-	response.Paginated(c, []string{"a", "b"}, 25, params)
+	response.Paginated(c, []string{"a", "b"}, 25, 2, 10)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
@@ -67,18 +65,69 @@ func TestPaginated(t *testing.T) {
 	var body map[string]any
 	json.NewDecoder(w.Body).Decode(&body)
 
-	pg, ok := body["pagination"].(map[string]any)
+	if body["success"] != true {
+		t.Error("expected success=true")
+	}
+	if body["data"] == nil {
+		t.Error("expected data to be non-nil")
+	}
+
+	meta, ok := body["meta"].(map[string]any)
 	if !ok {
-		t.Fatal("expected pagination object in response")
+		t.Fatal("expected meta object in response")
 	}
-	if pg["page"] != float64(2) {
-		t.Errorf("pagination.page: got %v, want 2", pg["page"])
+	if meta["page"] != float64(2) {
+		t.Errorf("meta.page: got %v, want 2", meta["page"])
 	}
-	if pg["total"] != float64(25) {
-		t.Errorf("pagination.total: got %v, want 25", pg["total"])
+	if meta["limit"] != float64(10) {
+		t.Errorf("meta.limit: got %v, want 10", meta["limit"])
 	}
-	if pg["total_pages"] != float64(3) {
-		t.Errorf("pagination.total_pages: got %v, want 3", pg["total_pages"])
+	if meta["total"] != float64(25) {
+		t.Errorf("meta.total: got %v, want 25", meta["total"])
+	}
+	// 25 items / 10 per page = 3 pages (ceil)
+	if meta["total_pages"] != float64(3) {
+		t.Errorf("meta.total_pages: got %v, want 3", meta["total_pages"])
+	}
+}
+
+func TestPaginated_NoPaginationKey(t *testing.T) {
+	c, w := newContext()
+	response.Paginated(c, []any{}, 0, 1, 20)
+
+	var body map[string]any
+	json.NewDecoder(w.Body).Decode(&body)
+
+	if _, exists := body["pagination"]; exists {
+		t.Error("response must use 'meta' key, not 'pagination'")
+	}
+}
+
+func TestPaginated_TotalPagesCalculation(t *testing.T) {
+	cases := []struct {
+		total     int64
+		limit     int
+		wantPages int
+	}{
+		{total: 0, limit: 20, wantPages: 0},
+		{total: 20, limit: 20, wantPages: 1},
+		{total: 21, limit: 20, wantPages: 2},
+		{total: 100, limit: 20, wantPages: 5},
+		{total: 1, limit: 100, wantPages: 1},
+	}
+
+	for _, tc := range cases {
+		c, w := newContext()
+		response.Paginated(c, []any{}, tc.total, 1, tc.limit)
+
+		var body map[string]any
+		json.NewDecoder(w.Body).Decode(&body)
+		meta := body["meta"].(map[string]any)
+
+		if meta["total_pages"] != float64(tc.wantPages) {
+			t.Errorf("total=%d limit=%d: total_pages got %v, want %d",
+				tc.total, tc.limit, meta["total_pages"], tc.wantPages)
+		}
 	}
 }
 

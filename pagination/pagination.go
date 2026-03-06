@@ -24,11 +24,7 @@ type Params struct {
 // Never returns an error — invalid values fall back to defaults silently.
 func Parse(c *gin.Context) Params {
 	page := parsePositiveInt(c.Query("page"), defaultPage)
-	limit := parsePositiveInt(c.Query("limit"), defaultLimit)
-
-	if limit > maxLimit {
-		limit = maxLimit
-	}
+	limit := min(parsePositiveInt(c.Query("limit"), defaultLimit), maxLimit)
 
 	return Params{
 		Page:   page,

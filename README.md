@@ -3,7 +3,7 @@
 Shared Go library for the **TAIS** (Traffic Authority Information System — РБДА Tajikistan) platform.
 
 > **Module:** `github.com/DC-TechHQ/tais-core`
-> **Go version:** 1.24+
+> **Go version:** 1.26
 > **License:** Private — DC-TechHQ
 
 This library is the **single source of infrastructure truth** for all 28 TAIS microservices.
@@ -266,15 +266,16 @@ if pkgctx.HasPermission(u, "vehicle:read") { ... }
 
 ---
 
-### `middleware` — HTTP middleware
+### `pagination` — Query pagination
 
 ```go
-import pkgmw "github.com/DC-TechHQ/tais-core/middleware"
+import pkgpage "github.com/DC-TechHQ/tais-core/pagination"
 
-// Router setup:
-r.Use(pkgmw.Recovery(log))           // panic recovery → 500
-r.Use(pkgmw.RequestLogger(log))      // request logging with request_id
-r.Use(pkgmw.CORS(cfg.CORSOrigins))   // CORS headers
+// In handler — parse ?page=&limit= from query string
+params := pkgpage.Parse(c)
+// params.Page, params.Limit, params.Offset
+// Defaults: page=1, limit=20. Max limit: 100.
+```
 
 auth := pkgmw.Required(rdb, cfg.JWT, resolver) // JWT auth + blacklist + IP check + user ctx
 
@@ -289,33 +290,26 @@ internal.Use(pkgmw.InternalOnly(cfg.InternalToken))
 
 **`UserContextResolver` interface** — implemented per-service in `infra/resolver/identity.go`:
 
-
-All responses follow a single envelope format.
+All responses follow the same JSON structure. All error messages contain TJ + RU + EN.
 
 ```go
 import pkgresp "github.com/DC-TechHQ/tais-core/response"
 
-pkgresp.OK(c, dto)                        // 200 { success: true, data: ... }
-pkgresp.Created(c, dto)                   // 201 { success: true, data: ... }
-pkgresp.NoContent(c)                      // 204
-pkgresp.Paginated(c, list, total, params) // 200 + pagination meta
-pkgresp.Error(c, err)                     // maps *AppError → HTTP status + TJ+RU+EN
-pkgresp.ErrorWithData(c, err, data)       // same + extra data (e.g. validation errors)
+pkgresp.OK(c, data)                              // 200 {"success":true,"data":{...}}
+pkgresp.Created(c, data)                         // 201 {"success":true,"data":{...}}
+pkgresp.NoContent(c)                             // 204
+
+pkgresp.Paginated(c, items, total, page, limit)  // 200 {"success":true,"data":[...],"meta":{...}}
+// meta: {"total":500,"page":2,"limit":20,"total_pages":25}
+
+pkgresp.Error(c, err)                            // auto-mapped status
+// {"success":false,"error":{"code":"ErrNotFound","message":{"tj":"...","ru":"...","en":"..."}}}
+
+pkgresp.ErrorWithData(c, err, validationErrs)    // same + "data" field in error
 ```
 
-**Error envelope:**
-```json
-{
-  "success": false,
-  "error": {
-    "code": "ErrNotFound",
-    "message": { "tj": "...", "ru": "...", "en": "..." },
-    "data": null
-  }
-}
-```
+---
 
-**Validation error example:**
 ### `middleware` — HTTP middleware
 
 ```go
@@ -332,13 +326,6 @@ vehicles.Use(auth, pkgmw.StaffOnly())
 vehicles.GET("/:id",  pkgmw.Can("vehicle:read"),     handler.Get)
 vehicles.POST("",     pkgmw.Can("vehicle:register"), handler.Create)
 
-**Paginated response:**
-```json
-{
-  "success": true,
-  "data": [...],
-  "pagination": { "page": 1, "limit": 20, "total": 500, "total_pages": 25 }
-}
 // Citizen routes
 portal := v1.Group("/portal")
 portal.Use(auth, pkgmw.CitizenOnly())
