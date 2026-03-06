@@ -3,74 +3,63 @@ package db_test
 import (
 	"context"
 	"errors"
-	"net/http"
 	"testing"
 
 	"github.com/DC-TechHQ/tais-core/db"
 	pkgerr "github.com/DC-TechHQ/tais-core/errors"
-	"github.com/DC-TechHQ/tais-core/logger"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
-func testLogger(t *testing.T) *logger.Logger {
-	t.Helper()
-	log, err := logger.New(logger.Config{Level: "debug", Format: "console"})
-	if err != nil {
-		t.Fatalf("logger.New: %v", err)
-	}
-	return log
-}
-
 func TestTranslateError_Nil(t *testing.T) {
-	if err := db.TranslateError(nil, testLogger(t)); err != nil {
+	if err := db.TranslateError(nil); err != nil {
 		t.Errorf("expected nil, got %v", err)
 	}
 }
 
 func TestTranslateError_ContextCanceled(t *testing.T) {
-	if err := db.TranslateError(context.Canceled, testLogger(t)); err != nil {
+	if err := db.TranslateError(context.Canceled); err != nil {
 		t.Errorf("context.Canceled should return nil, got %v", err)
 	}
 }
 
 func TestTranslateError_NotFound(t *testing.T) {
-	err := db.TranslateError(gorm.ErrRecordNotFound, testLogger(t))
+	err := db.TranslateError(gorm.ErrRecordNotFound)
 	assertAppError(t, err, pkgerr.ErrNotFound)
 }
 
 func TestTranslateError_UniqueViolation(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: "23505", Message: "duplicate key"}
-	err := db.TranslateError(pgErr, testLogger(t))
+	err := db.TranslateError(pgErr)
 	assertAppError(t, err, pkgerr.ErrAlreadyExists)
 }
 
 func TestTranslateError_ForeignKeyViolation(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: "23503", Message: "foreign key violation"}
-	err := db.TranslateError(pgErr, testLogger(t))
+	err := db.TranslateError(pgErr)
 	assertAppError(t, err, pkgerr.ErrForeignKey)
 }
 
 func TestTranslateError_CheckViolation(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: "23514", Message: "check violation"}
-	err := db.TranslateError(pgErr, testLogger(t))
+	err := db.TranslateError(pgErr)
 	assertAppError(t, err, pkgerr.ErrInvalidData)
 }
 
 func TestTranslateError_NotNullViolation(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: "23502", Message: "not null violation"}
-	err := db.TranslateError(pgErr, testLogger(t))
+	err := db.TranslateError(pgErr)
 	assertAppError(t, err, pkgerr.ErrInvalidData)
 }
 
 func TestTranslateError_Deadlock(t *testing.T) {
 	pgErr := &pgconn.PgError{Code: "40P01", Message: "deadlock detected"}
-	err := db.TranslateError(pgErr, testLogger(t))
+	err := db.TranslateError(pgErr)
 	assertAppError(t, err, pkgerr.ErrDeadlock)
 }
 
 func TestTranslateError_UnknownError(t *testing.T) {
-	err := db.TranslateError(errors.New("some unknown error"), testLogger(t))
+	err := db.TranslateError(errors.New("some unknown error"))
 	assertAppError(t, err, pkgerr.ErrInternal)
 }
 
@@ -86,5 +75,4 @@ func assertAppError(t *testing.T, got error, want *pkgerr.AppError) {
 	if appErr.Status != want.Status {
 		t.Errorf("Status: got %d, want %d", appErr.Status, want.Status)
 	}
-	_ = http.StatusOK // suppress unused import if test runs without full suite
 }

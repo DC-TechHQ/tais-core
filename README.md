@@ -136,8 +136,10 @@ gdb, err := pkgdb.New(pkgdb.Config{
     ConnMaxLifetime: 300,
 }, log)
 
-// Translate errors — call in every repository method
-err = pkgdb.TranslateError(err, log)
+// Translate errors — call in every repository method AFTER logging the raw error.
+// Pure translation — no logging. Repositories log context (operation, entity ID)
+// themselves before calling TranslateError.
+err = pkgdb.TranslateError(err)
 // nil → nil, ErrRecordNotFound → *AppError(404), pg23505 → *AppError(409), etc.
 
 // Fluent query builder — all column names are validated against

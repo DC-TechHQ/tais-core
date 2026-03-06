@@ -5,7 +5,6 @@ import (
 	stderrors "errors"
 
 	pkgerr "github.com/DC-TechHQ/tais-core/errors"
-	"github.com/DC-TechHQ/tais-core/logger"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
@@ -20,39 +19,42 @@ const (
 )
 
 // TranslateError maps raw GORM / pgx errors to a clean *pkgerr.AppError.
+// Pure translation — no logging. The repository logs the raw error before
+// calling this function, so structured context (operation, entity ID, etc.)
+// is captured at the point where it is available.
 //
-// Responsibilities:
-//   - Logs all non-trivial database errors via log.Error before returning.
-//   - Returns nil for nil error and for context.Canceled (graceful cancellation).
-//   - Returns pkgerr.ErrNotFound for gorm.ErrRecordNotFound (no logging needed).
-//   - Returns typed AppError for known PostgreSQL SQLSTATE codes.
-//   - Returns pkgerr.ErrInternal for unrecognised errors.
+// Mapping:
+//
+//	gorm.ErrRecordNotFound → ErrNotFound      (404)
+//	23505 unique_violation  → ErrAlreadyExists (409)
+//	23503 foreign_key       → ErrForeignKey    (400)
+//	23502 not_null          → ErrInvalidData   (400)
+//	23514 check_violation   → ErrInvalidData   (400)
+//	40P01 deadlock          → ErrDeadlock      (409)
+//	context.Canceled        → nil  (graceful cancellation)
+//	everything else         → ErrInternal      (500)
 //
 // Usage (from a repository method):
 //
-//	return database.TranslateError(err, r.log)
-func TranslateError(err error, log *logger.Logger) error {
+//	if err := r.db.WithContext(ctx).First(&m, id).Error; err != nil {
+//	    r.log.Error("FindByID", "id", id, "error", err)
+//	    return nil, pkgdb.TranslateError(err)
+//	}
+func TranslateError(err error) error {
 	if err == nil {
 		return nil
 	}
 
-	// Graceful cancellation — treat as no error; caller decides what to do.
 	if stderrors.Is(err, context.Canceled) {
 		return nil
 	}
 
-	// GORM not-found sentinel — no DB-level error, no logging needed.
 	if stderrors.Is(err, gorm.ErrRecordNotFound) {
 		return pkgerr.ErrNotFound
 	}
 
-	// PostgreSQL SQLSTATE codes.
-	if pgErr, ok := stderrors.AsType[*pgconn.PgError](err); ok {
-		log.Error("db: sql error",
-			"pg_code", pgErr.Code,
-			"pg_message", pgErr.Message,
-			"pg_detail", pgErr.Detail,
-		)
+	var pgErr *pgconn.PgError
+	if stderrors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case pgCodeUniqueViolation:
 			return pkgerr.ErrAlreadyExists
@@ -66,6 +68,5 @@ func TranslateError(err error, log *logger.Logger) error {
 		return pkgerr.ErrInternal
 	}
 
-	log.Error("db: unhandled error", "error", err)
 	return pkgerr.ErrInternal
 }
