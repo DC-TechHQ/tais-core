@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# .ai/init — create symlinks for AI tool context files
+#
+# Usage:
+#   .ai/init        → create all symlinks (default)
+#
+# Source of truth: .ai/context.md — edit ONLY this file.
+# CLAUDE.md, AGENTS.md, .gemini/GEMINI.md are symlinks — never edit them directly.
+# After clone: run .ai/init once to recreate symlinks (git tracks symlinks natively).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CONTEXT_REL=".ai/context.md"
+CONTEXT_ABS="${REPO_ROOT}/${CONTEXT_REL}"
+
+if [ ! -f "$CONTEXT_ABS" ]; then
+    echo "Error: .ai/context.md not found" >&2
+    exit 1
+fi
+
+cd "$REPO_ROOT"
+
+echo "Creating AI tool symlinks → ${CONTEXT_REL}"
+
+rm -f CLAUDE.md
+ln -s "$CONTEXT_REL" CLAUDE.md
+echo "  ✓ CLAUDE.md        (Claude Code)"
+
+rm -f AGENTS.md
+ln -s "$CONTEXT_REL" AGENTS.md
+echo "  ✓ AGENTS.md        (OpenAI Codex)"
+
+mkdir -p .gemini
+rm -f .gemini/GEMINI.md
+ln -s "../${CONTEXT_REL}" .gemini/GEMINI.md
+echo "  ✓ .gemini/GEMINI.md  (Gemini CLI)"
+
+echo ""
+echo "Done. Edit .ai/context.md — all three tools read it automatically."

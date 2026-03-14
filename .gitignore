@@ -73,5 +73,3 @@ docker-data/
 debug
 __debug_bin
 /config/config.yaml
-CLAUDE.md
-CLAUDE.service-template.md
