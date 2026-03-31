@@ -73,3 +73,11 @@ docker-data/
 debug
 __debug_bin
 /config/config.yaml
+
+# ======================
+# AI tool context files
+# ======================
+.ai/
+.gemini/
+CLAUDE.md
+AGENTS.md

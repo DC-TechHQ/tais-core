@@ -4,7 +4,6 @@ Shared Go library for the **TAIS** (Traffic Authority Information System — Р�
 
 > **Module:** `github.com/DC-TechHQ/tais-core`
 > **Go version:** 1.26
-> **License:** Private — DC-TechHQ
 
 This library is the **single source of infrastructure truth** for all 28 TAIS microservices.
 Every service imports it; nothing is copy-pasted between services.
@@ -477,23 +476,17 @@ pkgevent "github.com/DC-TechHQ/tais-core/event"
 
 ---
 
-## Development usage (before tagging v0.1.0)
+## Usage
+
+```bash
+go get github.com/DC-TechHQ/tais-core@latest
+```
 
 ```go
-// In service go.mod — use replace directive while developing locally
+// In service go.mod — use replace directive for local development
 require github.com/DC-TechHQ/tais-core v0.0.0
 
 replace github.com/DC-TechHQ/tais-core => ../tais-core
-```
-
-After tagging:
-```bash
-go get github.com/DC-TechHQ/tais-core@v0.1.0
-```
-
-Private module — all services must set:
-```bash
-export GOPRIVATE=github.com/DC-TechHQ/*
 ```
 
 ---
