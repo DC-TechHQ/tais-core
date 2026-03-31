@@ -57,13 +57,26 @@ msg := pkgi18n.Get("ErrVehicleNotFound", pkgi18n.LangRU)
 
 HTTP-aware error type. Always carries an i18n code + HTTP status. Never wrap across layers.
 
+Domain errors are **pure string constants** — no HTTP status in the domain layer.
+HTTP status is registered at the delivery layer via `RegisterStatus`.
+
 ```go
 import pkgerr "github.com/DC-TechHQ/tais-core/errors"
 
-// Service-level custom error
-var ErrVehicleNotFound = pkgerr.New(i18n.ErrVehicleNotFound, 404)
+// internal/domain/errors.go — string constants ONLY, zero imports
+const ErrVehicleNotFound = "ErrVehicleNotFound"
 
-// Common errors available:
+// internal/i18n/vehicle.go — HTTP status + translation registered in init()
+pkgerr.RegisterStatus(domain.ErrVehicleNotFound, http.StatusNotFound)
+pkgi18n.Register(map[string]map[string]string{
+    domain.ErrVehicleNotFound: {
+        pkgi18n.LangTJ: "Нақлиёт ёфт нашуд",
+        pkgi18n.LangRU: "Транспортное средство не найдено",
+        pkgi18n.LangEN: "Vehicle not found",
+    },
+})
+
+// Common errors (tais-core built-ins, HTTP status already embedded):
 pkgerr.ErrInternal          // 500
 pkgerr.ErrInvalidData       // 400
 pkgerr.ErrNotFound          // 404
