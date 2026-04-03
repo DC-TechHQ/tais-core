@@ -26,6 +26,7 @@ type Config struct {
 type Claims struct {
 	Sub   uint      `json:"sub"`              // staff_member.id or citizen.id
 	Type  TokenType `json:"type"`             // "staff" | "citizen"
+	Lang  string    `json:"lang"`             // "tj" | "ru" | "en" — user's preferred language
 	IpNet string    `json:"ip_net,omitempty"` // e.g. "10.200.1" — staff only
 	JTI   string    `json:"jti"`              // unique token ID (blacklist key)
 	jwt.RegisteredClaims

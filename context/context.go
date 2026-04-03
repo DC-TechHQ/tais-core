@@ -13,7 +13,8 @@ const KeyUser = "tais_user"
 // the UserContextResolver on cache miss, then stored back to Redis (TTL 5 min).
 type UserCtx struct {
 	ID            uint     `json:"id"`
-	Type          string   `json:"type"` // "staff" | "citizen"
+	Type          string   `json:"type"`             // "staff" | "citizen"
+	Lang          string   `json:"lang"`             // "tj" | "ru" | "en"
 	IsSuperAdmin  bool     `json:"is_super_admin"`
 	IsActive      bool     `json:"is_active"`
 	Roles         []string `json:"roles"`
