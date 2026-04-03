@@ -88,7 +88,7 @@ func Subscribe(
 	subject, consumer string,
 	handler func(*nats.Msg),
 	log *logger.Logger,
-) {
+) error {
 	_, err := js.Subscribe(subject, func(msg *nats.Msg) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -109,5 +109,7 @@ func Subscribe(
 			"consumer", consumer,
 			"error", err,
 		)
+		return err
 	}
+	return nil
 }

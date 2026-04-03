@@ -15,7 +15,8 @@ type Config struct {
 	DSN             string
 	MaxOpenConns    int
 	MaxIdleConns    int
-	ConnMaxLifetime int // seconds
+	ConnMaxLifetime int // seconds — rotate long-lived connections (default 1800)
+	ConnMaxIdleTime int // seconds — reclaim idle connections in quiet periods (default 600)
 }
 
 // New opens a GORM connection, configures the connection pool, and sets a slow
@@ -46,12 +47,17 @@ func New(cfg Config, log *logger.Logger) (*gorm.DB, error) {
 	}
 	lifetime := cfg.ConnMaxLifetime
 	if lifetime <= 0 {
-		lifetime = 300
+		lifetime = 1800
+	}
+	idleTime := cfg.ConnMaxIdleTime
+	if idleTime <= 0 {
+		idleTime = 600
 	}
 
 	sqlDB.SetMaxOpenConns(maxOpen)
 	sqlDB.SetMaxIdleConns(maxIdle)
 	sqlDB.SetConnMaxLifetime(time.Duration(lifetime) * time.Second)
+	sqlDB.SetConnMaxIdleTime(time.Duration(idleTime) * time.Second)
 
 	if err = sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("db: ping failed: %w", err)

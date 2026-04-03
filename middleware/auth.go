@@ -135,6 +135,7 @@ func StaffOnly() gin.HandlerFunc {
 
 // loadUserCtx loads user context from Redis cache.
 // On cache miss, calls the resolver, then caches the result for 5 minutes.
+// Redis errors are treated as cache misses — the resolver is always the source of truth.
 func loadUserCtx(
 	ctx context.Context,
 	rdb *redis.Client,
@@ -150,14 +151,14 @@ func loadUserCtx(
 			return &u, nil
 		}
 	}
+	// Redis error or unmarshal failure — fall through to resolver.
 
-	// Cache miss — resolve from identity service.
 	u, err := resolver.Resolve(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Cache the resolved context.
+	// Best-effort cache write — never fail the request on cache error.
 	if data, jsonErr := json.Marshal(u); jsonErr == nil {
 		_ = rdb.Set(ctx, cacheKey, data, userCtxTTL).Err()
 	}
