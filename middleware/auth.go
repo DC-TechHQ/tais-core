@@ -54,12 +54,6 @@ func Required(rdb *redis.Client, jwtCfg pkgjwt.Config, resolver UserContextResol
 			return
 		}
 
-		// IP subnet binding (staff tokens only).
-		if !pkgjwt.CheckIPNet(claims, c.ClientIP()) {
-			pkgresp.Error(c, pkgerr.ErrUnauthorized)
-			return
-		}
-
 		ctx := c.Request.Context()
 
 		// Blacklist check.
@@ -84,6 +78,13 @@ func Required(rdb *redis.Client, jwtCfg pkgjwt.Config, resolver UserContextResol
 		// Block check.
 		if !userCtx.IsActive {
 			pkgresp.Error(c, pkgerr.ErrUserBlocked)
+			return
+		}
+
+		// IP subnet binding (staff tokens only).
+		// super_admin and sysadmin role bypass IP restriction — they may connect from any location.
+		if !isBypassIPCheck(userCtx) && !pkgjwt.CheckIPNet(claims, c.ClientIP()) {
+			pkgresp.Error(c, pkgerr.ErrUnauthorized)
 			return
 		}
 
@@ -172,4 +173,19 @@ func extractBearer(c *gin.Context) string {
 		return ""
 	}
 	return strings.TrimPrefix(header, "Bearer ")
+}
+
+// isBypassIPCheck returns true for principals that are allowed to connect from any IP.
+// super_admin: system developers — always unrestricted.
+// sysadmin: manages VPN infrastructure — must be able to connect remotely to fix issues.
+func isBypassIPCheck(u *pkgctx.UserCtx) bool {
+	if u.IsSuperAdmin {
+		return true
+	}
+	for _, role := range u.Roles {
+		if role == "sysadmin" {
+			return true
+		}
+	}
+	return false
 }

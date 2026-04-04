@@ -14,7 +14,6 @@ const KeyUser = "tais_user"
 type UserCtx struct {
 	ID            uint     `json:"id"`
 	Type          string   `json:"type"`             // "staff" | "citizen"
-	Lang          string   `json:"lang"`             // "tj" | "ru" | "en"
 	IsSuperAdmin  bool     `json:"is_super_admin"`
 	IsActive      bool     `json:"is_active"`
 	Roles         []string `json:"roles"`
